@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Shot Tracker</string>
+    
+    <!-- Home Screen -->
+    <string name="start_session">Start Session</string>
+    <string name="view_history">View History</string>
+    <string name="today_stats">Today\'s Stats</string>
+    <string name="no_stats_today">No shots tracked today</string>
+    
+    <!-- Session Screen -->
+    <string name="end_session">End Session</string>
+    <string name="session_active">Session Active</string>
+    <string name="made">Made</string>
+    <string name="attempted">Attempted</string>
+    <string name="percentage">Percentage</string>
+    
+    <!-- Summary Screen -->
+    <string name="session_summary">Session Summary</string>
+    <string name="save_session">Save Session</string>
+    <string name="discard_session">Discard Session</string>
+    <string name="duration">Duration</string>
+    
+    <!-- History Screen -->
+    <string name="history">History</string>
+    <string name="no_sessions">No sessions yet</string>
+    <string name="delete_session">Delete Session</string>
+    
+    <!-- Permissions -->
+    <string name="camera_permission_required">Camera permission is required to track shots</string>
+    <string name="grant_permission">Grant Permission</string>
+    <string name="camera_permission_denied">Camera permission denied. Please enable it in settings.</string>
+    <string name="open_settings">Open Settings</string>
+    
+    <!-- Errors -->
+    <string name="error_camera_unavailable">Camera is not available</string>
+    <string name="error_session_save">Failed to save session</string>
+    <string name="error_generic">Something went wrong</string>
+    
+    <!-- Format Strings -->
+    <string name="stats_format">%1$d / %2$d - %3$d%%</string>
+    <string name="duration_format">%1$d:%2$02d</string>
+</resources>

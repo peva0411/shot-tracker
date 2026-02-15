@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Basketball Orange -->
+    <color name="orange_primary">#FF6B35</color>
+    <color name="orange_dark">#D94A1A</color>
+    <color name="orange_light">#FF8F66</color>
+    
+    <!-- Grayscale -->
+    <color name="black">#000000</color>
+    <color name="white">#FFFFFF</color>
+    <color name="gray_dark">#333333</color>
+    <color name="gray_medium">#666666</color>
+    <color name="gray_light">#CCCCCC</color>
+    
+    <!-- Status Colors -->
+    <color name="success_green">#4CAF50</color>
+    <color name="error_red">#F44336</color>
+</resources>
