@@ -64,6 +64,10 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    androidResources {
+        noCompress += "tflite"
+    }
 }
 
 dependencies {
@@ -110,6 +114,10 @@ dependencies {
 
     // OpenCV (will be added manually)
     // implementation(files("libs/opencv-4.9.0.aar"))
+
+    // TensorFlow Lite
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

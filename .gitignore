@@ -1,6 +1,7 @@
 # Gradle files
 .gradle/
 build/
+**/build/
 
 # Local configuration file (sdk path, etc)
 local.properties
@@ -32,3 +33,18 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# Python/ML local environments and caches
+.venv/
+.venv-ml/
+__pycache__/
+*.py[cod]
+
+# ML experiment and export artifacts
+runs/
+test-results/
+yolov8*_saved_model/
+test-media/
+datasets/
+*.pt
+*.onnx
