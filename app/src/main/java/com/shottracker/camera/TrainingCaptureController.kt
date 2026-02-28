@@ -78,6 +78,7 @@ class TrainingCaptureController(private val context: Context) {
 
     /**
      * Start recording a video. No-op if already recording.
+     * Records with audio only if RECORD_AUDIO permission is granted.
      * [onFinished] is called with the saved [File] when recording is stopped.
      */
     fun startRecording(onFinished: (File) -> Unit, onError: (String) -> Unit) {
@@ -85,13 +86,19 @@ class TrainingCaptureController(private val context: Context) {
         val file = File(captureDir, "video_${timestamp()}.mp4")
         val outputOptions = FileOutputOptions.Builder(file).build()
 
-        activeRecording = recorder.prepareRecording(context, outputOptions)
-            .withAudioEnabled()
+        val hasAudio = ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        val pendingRecording = recorder.prepareRecording(context, outputOptions)
+        val startedRecording = if (hasAudio) pendingRecording.withAudioEnabled() else pendingRecording
+
+        activeRecording = startedRecording
             .start(ContextCompat.getMainExecutor(context)) { event ->
                 when (event) {
                     is VideoRecordEvent.Start -> {
                         _isRecording.value = true
-                        Log.d(TAG, "Recording started: ${file.absolutePath}")
+                        Log.d(TAG, "Recording started (audio=$hasAudio): ${file.absolutePath}")
                     }
                     is VideoRecordEvent.Finalize -> {
                         _isRecording.value = false

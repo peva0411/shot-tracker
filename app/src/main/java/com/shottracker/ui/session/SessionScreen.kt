@@ -1,5 +1,8 @@
 package com.shottracker.ui.session
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -19,7 +22,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.shottracker.camera.CameraPreview
 import com.shottracker.camera.detector.BallDetection
@@ -33,8 +38,20 @@ fun SessionScreen(
     val uiState by viewModel.uiState.collectAsState()
     val detection by viewModel.detection.collectAsState()
     val permissionState = rememberCameraPermissionState()
+    val context = LocalContext.current
     var debugOverlayEnabled by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // Runtime RECORD_AUDIO permission request
+    var audioPermissionGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> audioPermissionGranted = granted }
 
     // Show snackbar on capture feedback
     LaunchedEffect(uiState.lastCaptureFeedback) {
@@ -82,7 +99,13 @@ fun SessionScreen(
                     )
                 }
                 // Record video toggle
-                IconButton(onClick = { viewModel.toggleRecording() }) {
+                IconButton(onClick = {
+                    if (!audioPermissionGranted) {
+                        audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    } else {
+                        viewModel.toggleRecording()
+                    }
+                }) {
                     Icon(
                         imageVector = if (uiState.isRecording) Icons.Default.Stop
                                       else Icons.Default.FiberManualRecord,
