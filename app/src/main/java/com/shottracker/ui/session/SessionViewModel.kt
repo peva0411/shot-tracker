@@ -1,13 +1,17 @@
 package com.shottracker.ui.session
 
+import android.content.Context
 import android.util.Log
 import androidx.camera.core.ImageProxy
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.shottracker.camera.TrainingCaptureController
+import com.shottracker.camera.detector.BallDetector
 import com.shottracker.camera.detector.DetectionState
-import com.shottracker.camera.detector.ShotDetector
-import com.shottracker.camera.feedback.FeedbackManager
+import com.shottracker.media.CaptureRepository
+import com.shottracker.media.CaptureType
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,42 +29,88 @@ data class SessionUiState(
     val percentage: Int = 0,
     val durationSeconds: Long = 0,
     val isActive: Boolean = true,
-    val detectionState: DetectionState = DetectionState.IDLE
+    val detectionState: DetectionState = DetectionState.IDLE,
+    val isRecording: Boolean = false,
+    val lastCaptureFeedback: String? = null
 )
 
 @HiltViewModel
 class SessionViewModel @Inject constructor(
-    private val feedbackManager: FeedbackManager
+    @ApplicationContext private val context: Context,
+    private val captureRepository: CaptureRepository
 ) : ViewModel() {
     
     private val _uiState = MutableStateFlow(SessionUiState())
     val uiState: StateFlow<SessionUiState> = _uiState.asStateFlow()
     
-    private val shotDetector = ShotDetector()
+    private val ballDetector = BallDetector(context)
+
+    /** Live bounding-box detections — collect in the UI to draw a debug overlay. */
+    val detection = ballDetector.detection
+
+    val captureController = TrainingCaptureController(context)
+
     private var sessionStartTime = System.currentTimeMillis()
     
     init {
         viewModelScope.launch {
-            shotDetector.detectionState.collect { state ->
+            ballDetector.detectionState.collect { state ->
                 _uiState.value = _uiState.value.copy(detectionState = state)
-                
-                // Auto-increment when shot is confirmed
-                if (state == DetectionState.CONFIRMED) {
-                    incrementMade()
-                    feedbackManager.vibrate() // Haptic feedback
-                    // Clear confirmed state after a delay
-                    kotlinx.coroutines.delay(500)
-                    shotDetector.clearConfirmedState()
-                }
+            }
+        }
+        viewModelScope.launch {
+            captureController.isRecording.collect { recording ->
+                _uiState.value = _uiState.value.copy(isRecording = recording)
             }
         }
     }
     
     /**
-     * Analyze a camera frame for shot detection.
+     * Analyze a camera frame for ball detection (debug overlay only).
      */
     fun onFrameAnalyzed(imageProxy: ImageProxy) {
-        shotDetector.analyzeFrame(imageProxy)
+        ballDetector.analyzeFrame(imageProxy)
+    }
+
+    /** Capture a single JPEG training frame. */
+    fun captureFrame() {
+        captureController.captureFrame(
+            onSaved = { file ->
+                viewModelScope.launch {
+                    captureRepository.insertCapture(file.absolutePath, "image/jpeg", CaptureType.FRAME)
+                    _uiState.value = _uiState.value.copy(lastCaptureFeedback = "Frame saved")
+                }
+            },
+            onError = { msg ->
+                _uiState.value = _uiState.value.copy(lastCaptureFeedback = "Capture failed: $msg")
+                Log.e(TAG, "Frame capture error: $msg")
+            }
+        )
+    }
+
+    /** Toggle video recording on/off. */
+    fun toggleRecording() {
+        if (_uiState.value.isRecording) {
+            captureController.stopRecording()
+        } else {
+            captureController.startRecording(
+                onFinished = { file ->
+                    viewModelScope.launch {
+                        captureRepository.insertCapture(file.absolutePath, "video/mp4", CaptureType.VIDEO)
+                        _uiState.value = _uiState.value.copy(lastCaptureFeedback = "Video saved")
+                    }
+                },
+                onError = { msg ->
+                    _uiState.value = _uiState.value.copy(lastCaptureFeedback = "Recording failed: $msg")
+                    Log.e(TAG, "Recording error: $msg")
+                }
+            )
+        }
+    }
+
+    /** Clear the last capture feedback message after it has been shown. */
+    fun clearCaptureFeedback() {
+        _uiState.value = _uiState.value.copy(lastCaptureFeedback = null)
     }
     
     /**
@@ -113,7 +163,6 @@ class SessionViewModel @Inject constructor(
      */
     fun decrementMissed() {
         _uiState.value = _uiState.value.let { current ->
-            // Can't have fewer attempts than makes
             if (current.shotsAttempted > current.shotsMade) {
                 val newAttempted = current.shotsAttempted - 1
                 current.copy(
@@ -128,6 +177,7 @@ class SessionViewModel @Inject constructor(
      * End the current session.
      */
     fun endSession(): SessionResult {
+        captureController.stopRecording()
         val duration = (System.currentTimeMillis() - sessionStartTime) / 1000
         _uiState.value = _uiState.value.copy(
             isActive = false,
@@ -149,7 +199,7 @@ class SessionViewModel @Inject constructor(
     
     override fun onCleared() {
         super.onCleared()
-        shotDetector.reset()
+        ballDetector.close()
     }
 }
 

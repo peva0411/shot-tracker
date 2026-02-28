@@ -11,7 +11,8 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun HomeScreen(
     onStartSession: () -> Unit,
-    onViewHistory: () -> Unit
+    onViewHistory: () -> Unit,
+    onViewLibrary: () -> Unit = {}
 ) {
     Scaffold { paddingValues ->
         Column(
@@ -75,6 +76,20 @@ fun HomeScreen(
             ) {
                 Text(
                     text = "VIEW HISTORY",
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            OutlinedButton(
+                onClick = onViewLibrary,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+            ) {
+                Text(
+                    text = "TRAINING LIBRARY",
                     style = MaterialTheme.typography.titleMedium
                 )
             }

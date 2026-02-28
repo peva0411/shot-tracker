@@ -265,7 +265,7 @@ This loop usually matters more than switching architectures repeatedly.
 2. Train `yolo11n`.
 3. Export FP16 TFLite.
 4. Verify mobile FPS + real shot clips.
-5. Only then test alternatives (`yolo26n`, SAHI, tracking additions).
+5. Only then test alternatives (larger YOLO11 variants, SAHI, tracking additions).
 
 ---
 

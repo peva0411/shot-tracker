@@ -7,6 +7,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.shottracker.ui.history.HistoryScreen
 import com.shottracker.ui.home.HomeScreen
+import com.shottracker.ui.library.LibraryScreen
 import com.shottracker.ui.session.SessionScreen
 import com.shottracker.ui.summary.SummaryScreen
 
@@ -17,6 +18,7 @@ sealed class Screen(val route: String) {
         fun createRoute(sessionId: Long) = "summary/$sessionId"
     }
     object History : Screen("history")
+    object Library : Screen("library")
 }
 
 @Composable
@@ -34,6 +36,9 @@ fun ShotTrackerApp(
                 },
                 onViewHistory = {
                     navController.navigate(Screen.History.route)
+                },
+                onViewLibrary = {
+                    navController.navigate(Screen.Library.route)
                 }
             )
         }
@@ -70,6 +75,12 @@ fun ShotTrackerApp(
                 onBack = {
                     navController.popBackStack()
                 }
+            )
+        }
+
+        composable(Screen.Library.route) {
+            LibraryScreen(
+                onBack = { navController.popBackStack() }
             )
         }
     }

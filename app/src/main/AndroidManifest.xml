@@ -4,6 +4,12 @@
     <!-- Camera permission for shot detection -->
     <uses-permission android:name="android.permission.CAMERA" />
     
+    <!-- Internet access for Google Drive uploads -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    
+    <!-- Microphone for video recording -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    
     <!-- Camera feature requirement -->
     <uses-feature
         android:name="android.hardware.camera"

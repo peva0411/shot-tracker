@@ -62,6 +62,9 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "META-INF/DEPENDENCIES"
+            excludes += "META-INF/LICENSE*"
+            excludes += "META-INF/NOTICE*"
         }
     }
 
@@ -98,6 +101,7 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.3.1")
     implementation("androidx.camera:camera-lifecycle:1.3.1")
     implementation("androidx.camera:camera-view:1.3.1")
+    implementation("androidx.camera:camera-video:1.3.1")
 
     // Room
     implementation("androidx.room:room-runtime:2.6.1")
@@ -118,6 +122,17 @@ dependencies {
     // TensorFlow Lite
     implementation("org.tensorflow:tensorflow-lite:2.14.0")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+
+    // Coil for image thumbnails
+    implementation("io.coil-kt:coil-compose:2.5.0")
+
+    // Google Sign-In
+    implementation("com.google.android.gms:play-services-auth:21.0.0")
+
+    // Google Drive REST API
+    implementation("com.google.apis:google-api-services-drive:v3-rev20240123-2.0.0")
+    implementation("com.google.api-client:google-api-client-android:2.2.0")
+    implementation("com.google.http-client:google-http-client-gson:1.44.1")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

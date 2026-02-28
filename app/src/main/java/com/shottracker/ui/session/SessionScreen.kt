@@ -1,25 +1,28 @@
 package com.shottracker.ui.session
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.shottracker.camera.CameraPreview
-import com.shottracker.camera.detector.DetectionState
+import com.shottracker.camera.detector.BallDetection
 import com.shottracker.camera.rememberCameraPermissionState
 
 @Composable
@@ -28,7 +31,18 @@ fun SessionScreen(
     viewModel: SessionViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val detection by viewModel.detection.collectAsState()
     val permissionState = rememberCameraPermissionState()
+    var debugOverlayEnabled by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Show snackbar on capture feedback
+    LaunchedEffect(uiState.lastCaptureFeedback) {
+        uiState.lastCaptureFeedback?.let { msg ->
+            snackbarHostState.showSnackbar(msg, duration = SnackbarDuration.Short)
+            viewModel.clearCaptureFeedback()
+        }
+    }
     
     LaunchedEffect(Unit) {
         if (!permissionState.hasPermission) {
@@ -36,19 +50,55 @@ fun SessionScreen(
         }
     }
     
-    Box(modifier = Modifier.fillMaxSize()) {
+    Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { padding ->
+    Box(modifier = Modifier.fillMaxSize().padding(padding)) {
         if (permissionState.hasPermission) {
-            // Camera preview (full screen)
+            // Camera preview (full screen) with capture use cases bound
             CameraPreview(
+                captureController = viewModel.captureController,
                 onFrameAnalyzed = { imageProxy ->
                     viewModel.onFrameAnalyzed(imageProxy)
                 }
             )
             
-            // Shot detection visual feedback
-            ShotDetectionFeedback(
-                detectionState = uiState.detectionState
-            )
+            // Ball bounding-box debug overlay
+            if (debugOverlayEnabled) {
+                BallDetectionOverlay(detection = detection)
+            }
+
+            // Top-right toolbar: debug toggle + capture buttons
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                // Capture frame button
+                IconButton(onClick = { viewModel.captureFrame() }) {
+                    Icon(
+                        imageVector = Icons.Default.CameraAlt,
+                        contentDescription = "Capture frame",
+                        tint = Color.White
+                    )
+                }
+                // Record video toggle
+                IconButton(onClick = { viewModel.toggleRecording() }) {
+                    Icon(
+                        imageVector = if (uiState.isRecording) Icons.Default.Stop
+                                      else Icons.Default.FiberManualRecord,
+                        contentDescription = if (uiState.isRecording) "Stop recording" else "Start recording",
+                        tint = if (uiState.isRecording) Color.Red else Color.White
+                    )
+                }
+                // Debug overlay toggle
+                IconButton(onClick = { debugOverlayEnabled = !debugOverlayEnabled }) {
+                    Icon(
+                        imageVector = Icons.Default.BugReport,
+                        contentDescription = "Toggle debug overlay",
+                        tint = if (debugOverlayEnabled) Color.Yellow else Color.White.copy(alpha = 0.6f)
+                    )
+                }
+            }
         } else {
             // Permission required screen
             CameraPermissionScreen(
@@ -153,33 +203,50 @@ fun SessionScreen(
             }
         }
     }
+    } // end Scaffold
 }
 
 @Composable
-fun ShotDetectionFeedback(detectionState: DetectionState) {
-    val alpha by animateFloatAsState(
-        targetValue = when (detectionState) {
-            DetectionState.CONFIRMED -> 0.8f
-            DetectionState.DETECTING -> 0.3f
-            DetectionState.IDLE -> 0f
-        },
-        animationSpec = tween(durationMillis = 200),
-        label = "detection_alpha"
-    )
-    
-    val color = when (detectionState) {
-        DetectionState.CONFIRMED -> Color.Green
-        DetectionState.DETECTING -> Color.Yellow
-        DetectionState.IDLE -> Color.Transparent
+fun BallDetectionOverlay(detection: BallDetection?) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Bounding box drawn on Canvas
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            if (detection == null) return@Canvas
+
+            val box = detection.boundingBox
+            val left   = box.left   * size.width
+            val top    = box.top    * size.height
+            val right  = box.right  * size.width
+            val bottom = box.bottom * size.height
+
+            drawRect(
+                color = Color.Cyan,
+                topLeft = Offset(left, top),
+                size = Size(right - left, bottom - top),
+                style = Stroke(width = 4f)
+            )
+        }
+
+        // Confidence badge fixed in top-left so it's always readable
+        if (detection != null) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 8.dp, top = 8.dp),
+                color = Color.Cyan.copy(alpha = 0.85f),
+                shape = MaterialTheme.shapes.small
+            ) {
+                Text(
+                    text = "🏀 %.0f%%".format(detection.confidence * 100),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.Black,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+        }
     }
-    
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .alpha(alpha)
-            .background(color.copy(alpha = 0.3f))
-    )
 }
+
 
 @Composable
 fun CameraPermissionScreen(

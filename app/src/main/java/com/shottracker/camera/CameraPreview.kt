@@ -20,11 +20,16 @@ import java.util.concurrent.Executors
 private const val TAG = "CameraPreview"
 
 /**
- * CameraX preview component with image analysis support.
+ * CameraX preview component with image analysis and optional training capture support.
+ *
+ * @param captureController When non-null, the [TrainingCaptureController]'s ImageCapture and
+ *                          VideoCapture use cases are bound to the camera, enabling
+ *                          [TrainingCaptureController.captureFrame] and recording.
  */
 @Composable
 fun CameraPreview(
     modifier: Modifier = Modifier,
+    captureController: TrainingCaptureController? = null,
     onFrameAnalyzed: (ImageProxy) -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -57,14 +62,10 @@ fun CameraPreview(
                 try {
                     val cameraProvider = cameraProviderFuture.get()
                     
-                    // Preview use case
                     val preview = Preview.Builder()
                         .build()
-                        .also {
-                            it.setSurfaceProvider(previewView.surfaceProvider)
-                        }
+                        .also { it.setSurfaceProvider(previewView.surfaceProvider) }
                     
-                    // Image analysis use case for shot detection
                     val imageAnalysis = ImageAnalysis.Builder()
                         .setTargetResolution(android.util.Size(1280, 720))
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -76,21 +77,28 @@ fun CameraPreview(
                             }
                         }
                     
-                    // Camera selector (back camera)
                     val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-                    
-                    // Unbind all use cases before rebinding
                     cameraProvider.unbindAll()
                     
-                    // Bind use cases to camera
-                    cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        cameraSelector,
-                        preview,
-                        imageAnalysis
-                    )
+                    if (captureController != null) {
+                        cameraProvider.bindToLifecycle(
+                            lifecycleOwner,
+                            cameraSelector,
+                            preview,
+                            imageAnalysis,
+                            captureController.imageCapture,
+                            captureController.videoCapture
+                        )
+                    } else {
+                        cameraProvider.bindToLifecycle(
+                            lifecycleOwner,
+                            cameraSelector,
+                            preview,
+                            imageAnalysis
+                        )
+                    }
                     
-                    Log.d(TAG, "Camera bound successfully")
+                    Log.d(TAG, "Camera bound successfully (captureController=${captureController != null})")
                 } catch (e: Exception) {
                     Log.e(TAG, "Camera binding failed", e)
                 }
