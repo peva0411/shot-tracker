@@ -170,6 +170,7 @@ class SessionViewModel @Inject constructor(
                     outcome = ShotOutcome.MADE
                     finalConfidence = (event.initialConfidence + 0.15f).coerceAtMost(1f)
                     incrementMade()   // attempts already counted; only increments shotsMade
+                    shotAnalyzer.notifyMade()
                     Log.d(TAG, "Outcome: MADE (ball passed below hoop bottom)")
                 }
 

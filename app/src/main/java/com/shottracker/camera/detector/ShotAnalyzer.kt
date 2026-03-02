@@ -5,9 +5,11 @@ import android.util.Log
 import com.shottracker.camera.HoopRegion
 
 private const val TAG = "ShotAnalyzer"
-private const val COOLDOWN_MS = 1500L
+private const val COOLDOWN_MS = 2000L              // base cooldown between detections
+private const val POST_MADE_EXTRA_LOCKOUT_MS = 2500L // extra lockout after a confirmed MADE
 private const val HOOP_OVERLAP_THRESHOLD = 0.25f
-private const val ARC_LOOKBACK_MS = 1500L  // how far back to look for a shooting arc
+private const val MIN_ENTRY_VELOCITY = 0.05f       // min downward speed (normalised units/sec)
+private const val ARC_LOOKBACK_MS = 800L           // arc must be recent — prevents old trajectory satisfying arc check
 
 /**
  * A detected shot attempt with kinematic metadata captured at the moment of detection.
@@ -38,6 +40,7 @@ data class ShotEvent(
 class ShotAnalyzer(private val trajectoryTracker: TrajectoryTracker) {
 
     private var lastShotMs = 0L
+    private var madeLockoutUntilMs = 0L
 
     /**
      * Analyse current trajectory against [hoopRegion].
@@ -48,6 +51,7 @@ class ShotAnalyzer(private val trajectoryTracker: TrajectoryTracker) {
 
         val now = System.currentTimeMillis()
         if (now - lastShotMs < COOLDOWN_MS) return null
+        if (now < madeLockoutUntilMs) return null
 
         val recent = trajectoryTracker.recentPositions(300L)
         if (recent.isEmpty()) return null
@@ -57,7 +61,7 @@ class ShotAnalyzer(private val trajectoryTracker: TrajectoryTracker) {
         if (overlap < HOOP_OVERLAP_THRESHOLD) return null
 
         val velocity = trajectoryTracker.verticalVelocity() ?: return null
-        if (velocity <= 0f) return null  // must be moving downward into hoop
+        if (velocity < MIN_ENTRY_VELOCITY) return null  // must be moving downward fast enough
 
         val snapshot = trajectoryTracker.snapshot()
 
@@ -86,7 +90,17 @@ class ShotAnalyzer(private val trajectoryTracker: TrajectoryTracker) {
         )
     }
 
-    fun reset() { lastShotMs = 0L }
+    fun reset() { lastShotMs = 0L; madeLockoutUntilMs = 0L }
+
+    /**
+     * Call when a MADE outcome is confirmed so the bounce-back arc can't re-trigger detection.
+     * For a mini hoop (~2 m) the ball returns to hoop level in ~1.2 s; the base cooldown alone
+     * isn't long enough, so we extend the lockout from the moment the outcome is known.
+     */
+    fun notifyMade() {
+        madeLockoutUntilMs = System.currentTimeMillis() + POST_MADE_EXTRA_LOCKOUT_MS
+        Log.d(TAG, "MADE lockout extended: no new shot for ${POST_MADE_EXTRA_LOCKOUT_MS}ms")
+    }
 
     private fun overlapFraction(a: RectF, b: RectF): Float {
         val interLeft   = maxOf(a.left,   b.left)
