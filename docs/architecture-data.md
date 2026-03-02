@@ -4,7 +4,9 @@
 
 ## Overview
 
-Captured training media (JPEG frames, MP4 videos) follows this pipeline:
+The data layer has two responsibilities:
+1. **Training media pipeline** — captures (JPEG/MP4) stored locally and uploadable to Google Drive.
+2. **Shot tracking** — per-shot trajectory snapshots with outcome classification, stored in Room for offline analysis.
 
 ```
 CameraX capture
@@ -20,6 +22,11 @@ Library screen (grid view, upload controls)
     │
     ▼
 Google Drive (ShotTracker Training Data folder)
+
+BallDetector → TrajectoryTracker → ShotAnalyzer
+    │
+    ▼
+Room DB (ShotEntity — trajectory JSON + outcome per detected shot)
 ```
 
 ---
@@ -29,10 +36,11 @@ Google Drive (ShotTracker Training Data folder)
 ### Room Database
 
 **`AppDatabase.kt`**
-- `@Database` with entities: `[CaptureEntity]`, version 1
+- `@Database` with entities: `[CaptureEntity, ShotEntity]`, version 2
 - Singleton pattern via `getInstance(context)`
 - Database file: `shot_tracker.db`
-- `@TypeConverters` for `CaptureType` and `UploadStatus` enums (stored as strings)
+- `@TypeConverters` for `CaptureType`, `UploadStatus`, and `ShotOutcome` enums (stored as strings)
+- `MIGRATION_1_2`: creates `shots` table (`CREATE TABLE IF NOT EXISTS`)
 
 **`CaptureEntity.kt`**
 ```kotlin
@@ -51,7 +59,6 @@ data class CaptureEntity(
 **Enums:**
 - `CaptureType`: `FRAME`, `VIDEO`
 - `UploadStatus`: `LOCAL`, `UPLOADING`, `UPLOADED`, `FAILED`
-
 **`CaptureDao.kt`**
 | Query                       | Returns                       | Purpose                          |
 |-----------------------------|-------------------------------|----------------------------------|
@@ -60,7 +67,7 @@ data class CaptureEntity(
 | `updateUploadStatus(id, status, driveFileId)` | — | Update upload state   |
 | `deleteById(id)`           | —                             | Remove from DB                   |
 
-**`DatabaseModule.kt`** — Hilt `@Module` providing `AppDatabase` (@Singleton) and `CaptureDao`.
+**`DatabaseModule.kt`** — Hilt `@Module` providing `AppDatabase` (@Singleton), `CaptureDao`, and `ShotDao`.
 
 ### CaptureRepository
 
@@ -74,6 +81,41 @@ data class CaptureEntity(
 | `markUploaded(id, driveFileId)`      | Sets status = `UPLOADED`, stores Drive file ID   |
 | `markFailed(id)`                     | Sets status = `FAILED`                           |
 | `deleteCapture(id, filePath)`        | Deletes from DB **and** deletes the local file   |
+
+### ShotEntity & Shot Tracking
+
+**`ShotEntity.kt`**
+```kotlin
+@Entity(tableName = "shots")
+data class ShotEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val capturedAt: Long,           // epoch millis
+    val outcome: ShotOutcome,       // ATTEMPTED / MADE / MISSED / AMBIGUOUS
+    val madeConfidence: Float,      // 0..1 confidence score
+    val trajectoryJson: String,     // JSON array of BallPosition snapshots
+    val hoopRegionJson: String      // hoop position at shot time (for analysis)
+)
+```
+
+**`ShotOutcome` enum:** `ATTEMPTED`, `MADE`, `MISSED`, `AMBIGUOUS`
+
+**`ShotDao.kt`**
+| Query                       | Returns                     | Purpose                             |
+|-----------------------------|-----------------------------|-------------------------------------|
+| `insertShot(shot)`          | `Long` (row ID)             | Insert new shot entity              |
+| `getAllShots()`             | `Flow<List<ShotEntity>>`    | Reactive list, newest first         |
+| `deleteById(id)`            | —                           | Remove shot record                  |
+
+**`ShotRepository.kt`** (`@Singleton`, `@Inject`) — serializes trajectory + hoop data to JSON:
+
+| Method                                                     | Purpose                                           |
+|------------------------------------------------------------|---------------------------------------------------|
+| `insertShot(event, outcome, hoopRegion, madeConfidence)`   | Serializes `BallPosition[]` + `HoopRegion` to JSON, inserts `ShotEntity` |
+| `getAllShots(): Flow<List<ShotEntity>>`                     | Passthrough to DAO                                |
+| `deleteShot(id)`                                           | Passthrough to DAO                                |
+
+Trajectory JSON format: `[{"cx":0.5,"cy":0.3,"bx":0.47,"by":0.28,"bw":0.06,"bh":0.06,"conf":0.87,"ts":1234567890}, ...]`
+Hoop JSON format: `{"cx":0.5,"cy":0.25,"w":0.12,"h":0.06}`
 
 ---
 

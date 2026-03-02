@@ -1,13 +1,13 @@
 # Shot Tracker — Architecture Overview
 
-> **Last updated:** February 2026
+> **Last updated:** March 2026
 > Sub-architecture docs: [Camera & Detection](./architecture-camera.md) · [Data & Upload Pipeline](./architecture-data.md)
 
 ## What This App Does
 
-An Android app for basketball shot tracking. Users open a camera session, manually count makes/misses, and can optionally capture frames (JPEG) and video clips (MP4) as training data for improving the ball-detection ML model. Captured media is stored locally and can be uploaded to Google Drive.
+An Android app for basketball shot tracking. Users open a camera session, point the phone at the hoop, and the app auto-detects shots using a YOLO-based ball detector and trajectory analysis. Counts can also be adjusted manually via +/− buttons at any time. Optionally, users can capture frames (JPEG) and video clips (MP4) as training data for improving the ML model, stored locally and uploadable to Google Drive.
 
-A YOLO-based ball detector runs in real-time for a **debug overlay** (bounding box + confidence) but does **not** auto-count shots — counting is fully manual via +/− buttons.
+The shot detection pipeline: ball detector → trajectory ring buffer → hoop-intersection check → downward arc + confidence scoring → post-shot outcome window (made/missed/ambiguous) → persisted to Room DB with trajectory JSON.
 
 ---
 
@@ -20,7 +20,7 @@ A YOLO-based ball detector runs in real-time for a **debug overlay** (bounding b
 | Build             | Gradle 8.2.2 + Kotlin DSL, KSP                |
 | UI                | Jetpack Compose + Material 3                   |
 | Camera            | CameraX (camera2, lifecycle, view, video)      |
-| ML Inference      | TensorFlow Lite 2.14 + Support Library         |
+| ML Inference      | TensorFlow Lite 2.14 + Support Library + GPU Delegate |
 | Database          | Room 2.6.1                                     |
 | DI                | Hilt (Dagger) 2.50                             |
 | Navigation        | Jetpack Compose Navigation 2.7.6              |
@@ -39,7 +39,7 @@ shot-tracker/
 │   └── src/main/
 │       ├── AndroidManifest.xml
 │       ├── assets/ml/
-│       │   ├── yolov8n.tflite        # YOLOv8-nano TFLite model (ball detection)
+│       │   ├── yolo11n.tflite        # YOLO11n TFLite model (ball detection)
 │       │   └── coco_labels.txt       # Class labels
 │       ├── java/com/shottracker/
 │       │   ├── MainActivity.kt       # Single-activity entry point (@AndroidEntryPoint)
@@ -49,20 +49,30 @@ shot-tracker/
 │       │   ├── camera/               # ← see architecture-camera.md
 │       │   │   ├── CameraPermissionHandler.kt
 │       │   │   ├── CameraPreview.kt
+│       │   │   ├── HoopPreferences.kt        # DataStore: hoop region (normalized coords)
 │       │   │   ├── TrainingCaptureController.kt
 │       │   │   ├── detector/
 │       │   │   │   ├── BallDetector.kt
+│       │   │   │   ├── BallKalmanFilter.kt   # Kalman filter for position interpolation
 │       │   │   │   ├── DetectionState.kt
+│       │   │   │   ├── ShotAnalyzer.kt       # Shot detection state machine
+│       │   │   │   ├── TrajectoryTracker.kt  # Ball position ring buffer
 │       │   │   │   └── TFLiteInferenceWrapper.kt
 │       │   │   └── feedback/
 │       │   │       └── FeedbackManager.kt
+│       │   │
+│       │   ├── data/
+│       │   │   └── DetectionPreferences.kt   # DataStore: confidence threshold
 │       │   │
 │       │   ├── media/                # ← see architecture-data.md
 │       │   │   ├── AppDatabase.kt
 │       │   │   ├── CaptureDao.kt
 │       │   │   ├── CaptureEntity.kt
 │       │   │   ├── CaptureRepository.kt
-│       │   │   └── DatabaseModule.kt
+│       │   │   ├── DatabaseModule.kt
+│       │   │   ├── ShotDao.kt
+│       │   │   ├── ShotEntity.kt             # Per-shot trajectory snapshot
+│       │   │   └── ShotRepository.kt
 │       │   │
 │       │   ├── drive/                # ← see architecture-data.md
 │       │   │   ├── GoogleDriveService.kt
@@ -113,10 +123,13 @@ shot-tracker/
 │  (owns MutableStateFlow, orchestrates logic)            │
 └──────────────────────┬──────────────────────────────────┘
                        │
-          ┌────────────┼────────────┐
-          ▼            ▼            ▼
-   BallDetector  CaptureRepo  DriveService
-   (camera/ML)    (Room DB)   (Google API)
+          ┌────────────┼──────────────┬──────────────┐
+          ▼            ▼              ▼              ▼
+   BallDetector  CaptureRepo    ShotRepo       DriveService
+   (camera/ML)   (Room DB)    (Room DB)       (Google API)
+        │
+        ▼
+  TrajectoryTracker → ShotAnalyzer
 ```
 
 ---
@@ -155,12 +168,16 @@ shot-tracker/
 | `FeedbackManager`          | @Singleton   | Self (`@Inject constructor`) |
 | `AppDatabase`              | @Singleton   | `DatabaseModule`   |
 | `CaptureDao`               | Unscoped     | `DatabaseModule`   |
+| `ShotDao`                  | Unscoped     | `DatabaseModule`   |
 | `CaptureRepository`        | @Singleton   | Self (`@Inject constructor`) |
+| `ShotRepository`           | @Singleton   | Self (`@Inject constructor`) |
+| `DetectionPreferences`     | @Singleton   | Self (`@Inject constructor`) |
+| `HoopPreferences`          | @Singleton   | Self (`@Inject constructor`) |
 | `GoogleDriveService`       | @Singleton   | Self (`@Inject constructor`) |
 | `SessionViewModel`         | ViewModel    | Hilt auto         |
 | `LibraryViewModel`         | ViewModel    | Hilt auto         |
 
-**Note:** `BallDetector` and `TrainingCaptureController` are **not** Hilt-managed — they are created directly in `SessionViewModel` because they have a lifecycle tied to the session.
+**Note:** `BallDetector`, `BallKalmanFilter`, `TrajectoryTracker`, `ShotAnalyzer`, and `TrainingCaptureController` are **not** Hilt-managed — they are created directly in `SessionViewModel` because their lifecycle is tied to the session.
 
 ---
 
@@ -190,16 +207,18 @@ shot-tracker/
 
 ## Key Design Decisions
 
-1. **Manual shot counting** — Auto-detection was removed; the ML model isn't accurate enough yet. Ball detector runs only for the debug bounding-box overlay.
-2. **No domain/use-case layer** — The app is simple enough that ViewModels call repositories directly. A domain layer can be introduced when business logic grows.
-3. **Local-first media** — Frames/videos save to app-private storage (`context.filesDir/training/`). Upload to Drive is manual from the Library screen.
-4. **Room for upload state** — `CaptureEntity` tracks each captured file's path, type, and upload status so state survives app restarts.
-5. **OAuth2 for Drive** — Uses `play-services-auth` + Drive REST API. Requires Google Cloud Console setup (Drive API enabled + Android OAuth client ID with SHA-1).
+1. **Auto shot detection with manual override** — The YOLO11n ball detector feeds a trajectory tracker and hoop-intersection analyzer. Shots are auto-counted; manual +/− buttons remain for corrections. An auto-detect toggle lets users disable it entirely.
+2. **Manual hoop calibration** — User places an orange ring over the hoop before shooting. The region is persisted in DataStore. YOLO-based hoop detection is planned once the model is retrained.
+3. **Shot outcome resolution window** — On shot detection, a 600ms coroutine window observes the ball trajectory: disappearance below hoop → MADE; upward reversal → MISSED; otherwise → AMBIGUOUS.
+4. **No domain/use-case layer** — The app is simple enough that ViewModels call repositories directly. A domain layer can be introduced when business logic grows.
+5. **Local-first media** — Frames/videos save to app-private storage (`context.filesDir/training/`). Upload to Drive is manual from the Library screen.
+6. **Room for upload and shot state** — `CaptureEntity` tracks upload status per file; `ShotEntity` stores per-shot trajectory JSON and outcome for offline analysis.
+7. **OAuth2 for Drive** — Uses `play-services-auth` + Drive REST API. Requires Google Cloud Console setup (Drive API enabled + Android OAuth client ID with SHA-1).
 
 ---
 
 ## Incomplete / Placeholder Screens
 
 - **HistoryScreen** — Shows "No sessions yet" stub. No Room persistence for sessions exists yet.
-- **SummaryScreen** — Displays hardcoded zeros. Not connected to SessionViewModel result data.
-- **FeedbackManager** — Wired in Hilt but no longer used by SessionViewModel (was for auto-detection vibration). Can be re-enabled or removed.
+- **SummaryScreen** — Displays hardcoded zeros. Not connected to `SessionViewModel` result data.
+- **FeedbackManager** — Wired in Hilt but not used. Available for re-enabling haptic feedback on shot detection.
