@@ -126,6 +126,8 @@ dependencies {
     implementation("org.tensorflow:tensorflow-lite:2.14.0")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
     implementation("org.tensorflow:tensorflow-lite-gpu:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-gpu-api:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-gpu-delegate-plugin:0.4.4")
 
     // Coil for image thumbnails
     implementation("io.coil-kt:coil-compose:2.5.0")

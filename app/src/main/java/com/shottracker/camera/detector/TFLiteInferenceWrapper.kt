@@ -42,7 +42,7 @@ class TFLiteInferenceWrapper(
                 builtWithGpu = true
                 Log.i(TAG, "GPU delegate enabled")
                 interp
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.w(TAG, "GPU delegate unavailable, falling back to CPU: ${e.message}")
                 Interpreter(modelBuffer, Interpreter.Options().setNumThreads(numThreads.coerceAtLeast(1)))
             }
