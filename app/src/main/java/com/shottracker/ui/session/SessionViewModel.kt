@@ -5,13 +5,23 @@ import android.util.Log
 import androidx.camera.core.ImageProxy
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.shottracker.camera.HoopPreferences
+import com.shottracker.camera.HoopRegion
 import com.shottracker.camera.TrainingCaptureController
 import com.shottracker.camera.detector.BallDetector
+import com.shottracker.camera.detector.BallPosition
 import com.shottracker.camera.detector.DetectionState
+import com.shottracker.camera.detector.ShotAnalyzer
+import com.shottracker.camera.detector.TrajectoryTracker
+import com.shottracker.data.DetectionPreferences
 import com.shottracker.media.CaptureRepository
 import com.shottracker.media.CaptureType
+import com.shottracker.media.ShotOutcome
+import com.shottracker.media.ShotRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,6 +29,8 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 private const val TAG = "SessionViewModel"
+private const val OUTCOME_WINDOW_MS = 600L   // ms to wait for made/missed signal after shot
+private const val DISAPPEARANCE_THRESHOLD_MS = 350L  // no ball for this long → likely went through
 
 /**
  * UI state for the active session screen.
@@ -31,27 +43,55 @@ data class SessionUiState(
     val isActive: Boolean = true,
     val detectionState: DetectionState = DetectionState.IDLE,
     val isRecording: Boolean = false,
-    val lastCaptureFeedback: String? = null
+    val lastCaptureFeedback: String? = null,
+    val confidenceThreshold: Float = DetectionPreferences.DEFAULT_CONFIDENCE,
+    /** The persisted hoop region, or null if not yet calibrated. */
+    val hoopRegion: HoopRegion? = null,
+    /** When true, detected shots automatically increment the attempted count. */
+    val autoDetectEnabled: Boolean = true,
+    /** True while the calibration overlay is shown. */
+    val isCalibrating: Boolean = false,
+    /** Fired when a shot is auto-detected; UI clears it after showing feedback. */
+    val shotDetectedFeedback: Boolean = false,
 )
 
 @HiltViewModel
 class SessionViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val captureRepository: CaptureRepository
+    private val captureRepository: CaptureRepository,
+    private val shotRepository: ShotRepository,
+    private val detectionPreferences: DetectionPreferences,
+    private val hoopPreferences: HoopPreferences,
 ) : ViewModel() {
-    
+
     private val _uiState = MutableStateFlow(SessionUiState())
     val uiState: StateFlow<SessionUiState> = _uiState.asStateFlow()
-    
+
     private val ballDetector = BallDetector(context)
 
     /** Live bounding-box detections — collect in the UI to draw a debug overlay. */
     val detection = ballDetector.detection
 
+    /** Rolling average inference time (ms) for the debug overlay. */
+    val inferenceTimeMs = ballDetector.inferenceTimeMs
+
     val captureController = TrainingCaptureController(context)
 
+    private val trajectoryTracker = TrajectoryTracker()
+    private val shotAnalyzer = ShotAnalyzer(trajectoryTracker)
+
+    /** Exposed so the UI can render the ball trail in the debug overlay. */
+    private val _ballTrail = MutableStateFlow<List<BallPosition>>(emptyList())
+    val ballTrail: StateFlow<List<BallPosition>> = _ballTrail.asStateFlow()
+
+    // Held separately so it can be read from the detection coroutine without StateFlow overhead.
+    @Volatile private var currentHoopRegion: HoopRegion? = null
+
+    /** Coroutine job that resolves made/missed after the post-shot observation window. */
+    private var pendingOutcomeJob: Job? = null
+
     private var sessionStartTime = System.currentTimeMillis()
-    
+
     init {
         viewModelScope.launch {
             ballDetector.detectionState.collect { state ->
@@ -63,13 +103,126 @@ class SessionViewModel @Inject constructor(
                 _uiState.value = _uiState.value.copy(isRecording = recording)
             }
         }
+        viewModelScope.launch {
+            detectionPreferences.confidenceThreshold.collect { threshold ->
+                ballDetector.confidenceThreshold = threshold
+                _uiState.value = _uiState.value.copy(confidenceThreshold = threshold)
+            }
+        }
+        viewModelScope.launch {
+            hoopPreferences.hoopRegion.collect { region ->
+                currentHoopRegion = region
+                _uiState.value = _uiState.value.copy(hoopRegion = region)
+            }
+        }
+        // Track trajectory and analyze for shots on every new ball detection.
+        viewModelScope.launch {
+            ballDetector.detection.collect { det ->
+                if (det != null) {
+                    trajectoryTracker.add(det)
+                    _ballTrail.value = trajectoryTracker.snapshot()
+
+                    if (_uiState.value.autoDetectEnabled) {
+                        val event = shotAnalyzer.analyze(currentHoopRegion)
+                        if (event != null) {
+                            onShotDetected(event)
+                        }
+                    }
+                }
+            }
+        }
     }
-    
+
     /**
-     * Analyze a camera frame for ball detection (debug overlay only).
+     * Called when [ShotAnalyzer] fires a [ShotEvent].
+     *
+     * Immediately counts a miss (conservative), then starts a [OUTCOME_WINDOW_MS] observation
+     * window (Step 4a).  After the window:
+     * - Ball disappeared below hoop → upgrade to MADE (call [incrementMade]; attempts unchanged).
+     * - Ball still visible and moving upward → confirm MISSED.
+     * - Otherwise → AMBIGUOUS (keep as missed count, save with AMBIGUOUS outcome).
+     */
+    private fun onShotDetected(event: com.shottracker.camera.detector.ShotEvent) {
+        incrementMissed()
+        _uiState.value = _uiState.value.copy(shotDetectedFeedback = true)
+        Log.d(TAG, "Shot detected (initialConf=%.2f arc=${event.hadProperArc})".format(event.initialConfidence))
+
+        pendingOutcomeJob?.cancel()
+        val capturedHoop = currentHoopRegion
+
+        pendingOutcomeJob = viewModelScope.launch {
+            delay(OUTCOME_WINDOW_MS)
+
+            // Step 4a: observe post-shot trajectory to determine outcome
+            val recentAfterShot = trajectoryTracker.recentPositions(DISAPPEARANCE_THRESHOLD_MS)
+            val lastPos = trajectoryTracker.positions.lastOrNull()
+
+            val outcome: ShotOutcome
+            val finalConfidence: Float
+
+            when {
+                // Ball disappeared entirely after passing through hoop zone → likely MADE
+                recentAfterShot.isEmpty() && lastPos != null &&
+                        lastPos.centerY > (capturedHoop?.rect?.bottom ?: 0f) + 0.03f -> {
+                    outcome = ShotOutcome.MADE
+                    finalConfidence = (event.initialConfidence + 0.15f).coerceAtMost(1f)
+                    incrementMade()   // attempts already counted; only increments shotsMade
+                    Log.d(TAG, "Outcome: MADE (ball disappeared below hoop)")
+                }
+
+                // Ball still visible and moving back upward → rim/backboard bounce → MISSED
+                recentAfterShot.isNotEmpty() &&
+                        (trajectoryTracker.verticalVelocity() ?: 0f) < -0.3f -> {
+                    outcome = ShotOutcome.MISSED
+                    finalConfidence = (event.initialConfidence - 0.1f).coerceAtLeast(0f)
+                    Log.d(TAG, "Outcome: MISSED (ball moving upward after shot)")
+                }
+
+                // Ambiguous — keep as missed count (already incremented), log as AMBIGUOUS
+                else -> {
+                    outcome = ShotOutcome.AMBIGUOUS
+                    finalConfidence = event.initialConfidence
+                    Log.d(TAG, "Outcome: AMBIGUOUS")
+                }
+            }
+
+            shotRepository.insertShot(
+                event          = event,
+                outcome        = outcome,
+                hoopRegion     = capturedHoop,
+                madeConfidence = finalConfidence,
+            )
+        }
+    }
+
+    /** Clear the shot-detected feedback flag after the UI has consumed it. */
+    fun clearShotDetectedFeedback() {
+        _uiState.value = _uiState.value.copy(shotDetectedFeedback = false)
+    }
+
+    /**
+     * Analyze a camera frame for ball detection.
      */
     fun onFrameAnalyzed(imageProxy: ImageProxy) {
         ballDetector.analyzeFrame(imageProxy)
+    }
+
+    /** Toggle auto shot detection on/off. */
+    fun toggleAutoDetect() {
+        _uiState.value = _uiState.value.copy(autoDetectEnabled = !_uiState.value.autoDetectEnabled)
+    }
+
+    /** Enter/exit the hoop calibration overlay. */
+    fun toggleCalibration() {
+        _uiState.value = _uiState.value.copy(isCalibrating = !_uiState.value.isCalibrating)
+    }
+
+    /** Save a new hoop region (called from the calibration overlay). */
+    fun saveHoopRegion(region: HoopRegion) {
+        viewModelScope.launch {
+            hoopPreferences.setHoopRegion(region)
+        }
+        _uiState.value = _uiState.value.copy(isCalibrating = false)
     }
 
     /** Capture a single JPEG training frame. */
@@ -112,10 +265,14 @@ class SessionViewModel @Inject constructor(
     fun clearCaptureFeedback() {
         _uiState.value = _uiState.value.copy(lastCaptureFeedback = null)
     }
-    
-    /**
-     * Manually increment made shots.
-     */
+
+    /** Update the detection confidence threshold. */
+    fun setConfidenceThreshold(value: Float) {
+        viewModelScope.launch {
+            detectionPreferences.setConfidenceThreshold(value)
+        }
+    }
+
     fun incrementMade() {
         _uiState.value = _uiState.value.let { current ->
             val newMade = current.shotsMade + 1
@@ -128,10 +285,7 @@ class SessionViewModel @Inject constructor(
         }
         Log.d(TAG, "Made incremented: ${_uiState.value.shotsMade}/${_uiState.value.shotsAttempted}")
     }
-    
-    /**
-     * Manually decrement made shots.
-     */
+
     fun decrementMade() {
         _uiState.value = _uiState.value.let { current ->
             if (current.shotsMade > 0) {
@@ -143,10 +297,7 @@ class SessionViewModel @Inject constructor(
             } else current
         }
     }
-    
-    /**
-     * Manually increment missed shots.
-     */
+
     fun incrementMissed() {
         _uiState.value = _uiState.value.let { current ->
             val newAttempted = current.shotsAttempted + 1
@@ -157,10 +308,7 @@ class SessionViewModel @Inject constructor(
         }
         Log.d(TAG, "Missed incremented: ${_uiState.value.shotsMade}/${_uiState.value.shotsAttempted}")
     }
-    
-    /**
-     * Manually decrement missed shots.
-     */
+
     fun decrementMissed() {
         _uiState.value = _uiState.value.let { current ->
             if (current.shotsAttempted > current.shotsMade) {
@@ -172,10 +320,7 @@ class SessionViewModel @Inject constructor(
             } else current
         }
     }
-    
-    /**
-     * End the current session.
-     */
+
     fun endSession(): SessionResult {
         captureController.stopRecording()
         val duration = (System.currentTimeMillis() - sessionStartTime) / 1000
@@ -183,29 +328,22 @@ class SessionViewModel @Inject constructor(
             isActive = false,
             durationSeconds = duration
         )
-        
         return SessionResult(
             shotsMade = _uiState.value.shotsMade,
             shotsAttempted = _uiState.value.shotsAttempted,
             durationSeconds = duration
         )
     }
-    
-    private fun calculatePercentage(made: Int, attempted: Int): Int {
-        return if (attempted > 0) {
-            ((made.toFloat() / attempted) * 100).toInt()
-        } else 0
-    }
-    
+
+    private fun calculatePercentage(made: Int, attempted: Int): Int =
+        if (attempted > 0) ((made.toFloat() / attempted) * 100).toInt() else 0
+
     override fun onCleared() {
         super.onCleared()
         ballDetector.close()
     }
 }
 
-/**
- * Result data from a completed session.
- */
 data class SessionResult(
     val shotsMade: Int,
     val shotsAttempted: Int,

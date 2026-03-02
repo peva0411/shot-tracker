@@ -19,4 +19,7 @@ object DatabaseModule {
 
     @Provides
     fun provideCaptureDao(db: AppDatabase): CaptureDao = db.captureDao()
+
+    @Provides
+    fun provideShotDao(db: AppDatabase): ShotDao = db.shotDao()
 }
