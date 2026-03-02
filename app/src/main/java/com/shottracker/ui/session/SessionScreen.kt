@@ -99,11 +99,18 @@ fun SessionScreen(
                             .align(Alignment.TopStart)
                             .padding(start = 8.dp, top = 48.dp)
                     )
+                    FrameSkipSlider(
+                        value = uiState.frameSkip,
+                        onValueChange = { viewModel.setFrameSkip(it) },
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(start = 8.dp, top = 160.dp)
+                    )
                     // Inference timing badge
                     Surface(
                         modifier = Modifier
                             .align(Alignment.TopStart)
-                            .padding(start = 8.dp, top = 110.dp),
+                            .padding(start = 8.dp, top = 220.dp),
                         color = Color.Black.copy(alpha = 0.6f),
                         shape = MaterialTheme.shapes.small
                     ) {
@@ -522,6 +529,34 @@ fun ConfidenceSlider(
                 value = value,
                 onValueChange = onValueChange,
                 valueRange = 0.05f..0.95f,
+                modifier = Modifier.height(24.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun FrameSkipSlider(
+    value: Int,
+    onValueChange: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.width(220.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+        shape = MaterialTheme.shapes.medium
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text(
+                text = "Frame skip: $value",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Slider(
+                value = value.toFloat(),
+                onValueChange = { onValueChange(it.toInt()) },
+                valueRange = 1f..8f,
+                steps = 6,
                 modifier = Modifier.height(24.dp)
             )
         }

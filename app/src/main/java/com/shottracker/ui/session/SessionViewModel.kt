@@ -53,6 +53,8 @@ data class SessionUiState(
     val isCalibrating: Boolean = false,
     /** Fired when a shot is auto-detected; UI clears it after showing feedback. */
     val shotDetectedFeedback: Boolean = false,
+    /** How many frames to skip between inference runs (debug tuning). */
+    val frameSkip: Int = 2,
 )
 
 @HiltViewModel
@@ -271,6 +273,12 @@ class SessionViewModel @Inject constructor(
         viewModelScope.launch {
             detectionPreferences.setConfidenceThreshold(value)
         }
+    }
+
+    /** Update how many frames are skipped between inference runs. */
+    fun setFrameSkip(value: Int) {
+        ballDetector.frameSkip = value
+        _uiState.value = _uiState.value.copy(frameSkip = value)
     }
 
     fun incrementMade() {

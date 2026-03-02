@@ -17,7 +17,7 @@ private const val TAG = "BallDetector"
 private const val MODEL_ASSET = "ml/yolo11n.tflite"
 private const val INPUT_SIZE = 640
 private const val DEFAULT_CONFIDENCE_THRESHOLD = 0.3f
-private const val FRAME_SKIP = 2                // run inference every 2nd frame
+private const val DEFAULT_FRAME_SKIP = 2        // run inference every Nth frame
 private const val DETECTION_COOLDOWN_MS = 2000L // minimum ms between CONFIRMED events
 
 /**
@@ -56,6 +56,10 @@ class BallDetector(context: Context) {
     @Volatile
     var confidenceThreshold: Float = DEFAULT_CONFIDENCE_THRESHOLD
 
+    /** How many frames to skip between inference runs. 1 = every frame, 2 = every other, etc. */
+    @Volatile
+    var frameSkip: Int = DEFAULT_FRAME_SKIP
+
     // Resize to 640×640, normalize to [0, 1] float32 (model expects normalized input)
     private val imageProcessor = ImageProcessor.Builder()
         .add(ResizeOp(INPUT_SIZE, INPUT_SIZE, ResizeOp.ResizeMethod.BILINEAR))
@@ -85,7 +89,7 @@ class BallDetector(context: Context) {
      * Must be called before the [ImageProxy] is closed.
      */
     fun analyzeFrame(imageProxy: ImageProxy) {
-        if (++frameCount % FRAME_SKIP != 0) {
+        if (++frameCount % frameSkip != 0) {
             // Emit a Kalman-predicted position on skipped frames
             if (kalman.isInitialized) {
                 val (px, py) = kalman.predict()
