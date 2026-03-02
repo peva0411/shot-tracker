@@ -30,7 +30,6 @@ import javax.inject.Inject
 
 private const val TAG = "SessionViewModel"
 private const val OUTCOME_WINDOW_MS = 600L   // ms to wait for made/missed signal after shot
-private const val DISAPPEARANCE_THRESHOLD_MS = 350L  // no ball for this long → likely went through
 
 /**
  * UI state for the active session screen.
@@ -142,6 +141,8 @@ class SessionViewModel @Inject constructor(
      * window (Step 4a).  After the window:
      * - Ball disappeared below hoop → upgrade to MADE (call [incrementMade]; attempts unchanged).
      * - Ball still visible and moving upward → confirm MISSED.
+     * - Ball passes below hoop bottom during window → MADE.
+     * - Ball moves back above hoop top → rim/board bounce → MISSED.
      * - Otherwise → AMBIGUOUS (keep as missed count, save with AMBIGUOUS outcome).
      */
     private fun onShotDetected(event: com.shottracker.camera.detector.ShotEvent) {
@@ -155,29 +156,29 @@ class SessionViewModel @Inject constructor(
         pendingOutcomeJob = viewModelScope.launch {
             delay(OUTCOME_WINDOW_MS)
 
-            // Step 4a: observe post-shot trajectory to determine outcome
-            val recentAfterShot = trajectoryTracker.recentPositions(DISAPPEARANCE_THRESHOLD_MS)
-            val lastPos = trajectoryTracker.positions.lastOrNull()
+            // Positions recorded during the observation window
+            val windowPositions = trajectoryTracker.recentPositions(OUTCOME_WINDOW_MS)
+            val hoopBottom = capturedHoop?.rect?.bottom ?: 0f
+            val hoopTop   = capturedHoop?.rect?.top   ?: 0f
 
             val outcome: ShotOutcome
             val finalConfidence: Float
 
             when {
-                // Ball disappeared entirely after passing through hoop zone → likely MADE
-                recentAfterShot.isEmpty() && lastPos != null &&
-                        lastPos.centerY > (capturedHoop?.rect?.bottom ?: 0f) + 0.03f -> {
+                // Ball passed below the hoop bottom → went through the net → MADE
+                windowPositions.any { it.centerY > hoopBottom + 0.02f } -> {
                     outcome = ShotOutcome.MADE
                     finalConfidence = (event.initialConfidence + 0.15f).coerceAtMost(1f)
                     incrementMade()   // attempts already counted; only increments shotsMade
-                    Log.d(TAG, "Outcome: MADE (ball disappeared below hoop)")
+                    Log.d(TAG, "Outcome: MADE (ball passed below hoop bottom)")
                 }
 
-                // Ball still visible and moving back upward → rim/backboard bounce → MISSED
-                recentAfterShot.isNotEmpty() &&
-                        (trajectoryTracker.verticalVelocity() ?: 0f) < -0.3f -> {
+                // Ball moved back above hoop top → bounced off rim/backboard → MISSED
+                windowPositions.isNotEmpty() &&
+                        windowPositions.last().centerY < hoopTop -> {
                     outcome = ShotOutcome.MISSED
                     finalConfidence = (event.initialConfidence - 0.1f).coerceAtLeast(0f)
-                    Log.d(TAG, "Outcome: MISSED (ball moving upward after shot)")
+                    Log.d(TAG, "Outcome: MISSED (ball moved above hoop top)")
                 }
 
                 // Ambiguous — keep as missed count (already incremented), log as AMBIGUOUS
