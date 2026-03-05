@@ -5,6 +5,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.shottracker.ui.datacollection.DataCollectionScreen
 import com.shottracker.ui.history.HistoryScreen
 import com.shottracker.ui.home.HomeScreen
 import com.shottracker.ui.library.LibraryScreen
@@ -19,6 +20,7 @@ sealed class Screen(val route: String) {
     }
     object History : Screen("history")
     object Library : Screen("library")
+    object DataCollection : Screen("data_collection")
 }
 
 @Composable
@@ -39,6 +41,9 @@ fun ShotTrackerApp(
                 },
                 onViewLibrary = {
                     navController.navigate(Screen.Library.route)
+                },
+                onDataCollection = {
+                    navController.navigate(Screen.DataCollection.route)
                 }
             )
         }
@@ -80,6 +85,12 @@ fun ShotTrackerApp(
 
         composable(Screen.Library.route) {
             LibraryScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.DataCollection.route) {
+            DataCollectionScreen(
                 onBack = { navController.popBackStack() }
             )
         }

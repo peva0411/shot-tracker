@@ -12,7 +12,8 @@ import androidx.compose.ui.unit.dp
 fun HomeScreen(
     onStartSession: () -> Unit,
     onViewHistory: () -> Unit,
-    onViewLibrary: () -> Unit = {}
+    onViewLibrary: () -> Unit = {},
+    onDataCollection: () -> Unit = {}
 ) {
     Scaffold { paddingValues ->
         Column(
@@ -90,6 +91,20 @@ fun HomeScreen(
             ) {
                 Text(
                     text = "TRAINING LIBRARY",
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            OutlinedButton(
+                onClick = onDataCollection,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+            ) {
+                Text(
+                    text = "DATA COLLECTION MODE",
                     style = MaterialTheme.typography.titleMedium
                 )
             }

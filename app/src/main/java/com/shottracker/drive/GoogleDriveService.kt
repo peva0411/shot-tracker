@@ -63,12 +63,12 @@ class GoogleDriveService @Inject constructor(
     }
 
     /**
-     * Upload [file] to the "ShotTracker Training Data" folder on Google Drive.
-     * Creates the folder if it does not exist.
+     * Upload [file] to a Google Drive folder. Creates the folder if it does not exist.
+     * [folderName] defaults to [TRAINING_FOLDER_NAME] if not specified.
      *
      * @return The Drive file ID on success, or throws on failure.
      */
-    suspend fun uploadFile(file: File, mimeType: String): String = withContext(Dispatchers.IO) {
+    suspend fun uploadFile(file: File, mimeType: String, folderName: String = TRAINING_FOLDER_NAME): String = withContext(Dispatchers.IO) {
         val account = GoogleSignIn.getLastSignedInAccount(context)
             ?: error("Not signed in to Google")
 
@@ -82,7 +82,7 @@ class GoogleDriveService @Inject constructor(
             credential
         ).setApplicationName(APP_NAME).build()
 
-        val folderId = getOrCreateFolder(driveService)
+        val folderId = getOrCreateFolder(driveService, folderName)
 
         val fileMetadata = DriveFile().apply {
             name = file.name
@@ -97,8 +97,8 @@ class GoogleDriveService @Inject constructor(
         uploaded.id
     }
 
-    private fun getOrCreateFolder(driveService: Drive): String {
-        val query = "mimeType='application/vnd.google-apps.folder' and name='$TRAINING_FOLDER_NAME' and trashed=false"
+    private fun getOrCreateFolder(driveService: Drive, folderName: String = TRAINING_FOLDER_NAME): String {
+        val query = "mimeType='application/vnd.google-apps.folder' and name='$folderName' and trashed=false"
         val result = driveService.files().list()
             .setQ(query)
             .setFields("files(id)")
@@ -108,7 +108,7 @@ class GoogleDriveService @Inject constructor(
             result.files[0].id
         } else {
             val folderMetadata = DriveFile().apply {
-                name = TRAINING_FOLDER_NAME
+                name = folderName
                 mimeType = "application/vnd.google-apps.folder"
             }
             driveService.files().create(folderMetadata).setFields("id").execute().id
